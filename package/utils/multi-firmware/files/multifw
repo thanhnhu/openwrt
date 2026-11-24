@@ -1,0 +1,422 @@
+#!/bin/sh
+# Multi Firmware for the Viettel 32x6 U-Boot (several firmwares in one UBI).
+#
+#   slot 1      running firmware   UBI volumes fit       + rootfs_data
+#   slot 2      stored firmware                fit_2     + rootfs_data_2
+#   slot spare  backup of the last upgrade     fit_spare + rootfs_data_spare
+#   recovery    initramfs fallback             recovery
+#   keenetic    KeeneticOS, outside UBI        raw NAND partitions "keenetic"
+#                                              (last 32 MiB) + "U-Config"
+#
+# The running firmware must be "fit"/"rootfs_data" (kernel + fstools), so
+# booting another slot means exchanging the volume names; from Linux that is
+# one atomic ubirename call, then a reboot. Firmware names are stored per UBI
+# volume id (env fwname_<id>) because ids do not change on rename.
+#
+# Never feed `$(fw_printenv ...)` into a pipe to `fw_setenv -s -`: both take
+# the same lock and deadlock. Env writes here always go through a file.
+
+ENVFILE=/usr/share/multifw/uboot-env.txt
+DATA_MAX_DEFAULT=0x600000
+OBSOLETE="mfw_last mfw_btn swap_slot"
+
+ubi_dev() {
+	local d
+	for d in /sys/class/ubi/ubi[0-9]*; do
+		[ -e "$d/mtd_num" ] || continue
+		[ "$(cat "/sys/class/mtd/mtd$(cat "$d/mtd_num")/name" 2>/dev/null)" = "ubi" ] && {
+			basename "$d"; return 0
+		}
+	done
+	return 1
+}
+
+vol_node() {	# <volname> -> ubiX_Y
+	local v
+	for v in /sys/class/ubi/${DEV}_*; do
+		[ "$(cat "$v/name" 2>/dev/null)" = "$1" ] && { basename "$v"; return 0; }
+	done
+	return 1
+}
+
+vol_id() { local n; n="$(vol_node "$1")" && echo "${n##*_}"; }
+vol_size() { local n; n="$(vol_node "$1")" && cat "/sys/class/ubi/$n/data_bytes" || echo 0; }
+leb() { cat /sys/class/ubi/$DEV/eraseblock_size; }
+free_bytes() { echo $(( $(cat /sys/class/ubi/$DEV/avail_eraseblocks) * $(leb) )); }
+
+envget() { fw_printenv -n "$1" 2>/dev/null; }
+
+envset_file() {	# lines "name value" / "name" (= unset) on stdin -> one fw_setenv call
+	local f=/tmp/multifw.$$.env
+	cat > "$f"
+	fw_setenv -s "$f"; local rc=$?
+	rm -f "$f"
+	return $rc
+}
+
+fit_name() {	# <volname>: label from env, else from the FIT image itself
+	local id n
+	id="$(vol_id "$1")" || return 0
+	n="$(envget "fwname_$id")"
+	if [ -z "$n" ]; then
+		n="$(dd if="/dev/$(vol_node "$1")" bs=4096 count=1 2>/dev/null | tr -c '\11\12\40-\176' '\n' | \
+			grep -m1 -iE "openwrt|immortalwrt|ARM64" | cut -c1-60)"
+	fi
+	echo "$n" | tr -d '"\\'
+}
+
+slot_vol() {	# slot id -> image volume name
+	case "$1" in
+	1) echo fit ;;
+	2|spare) echo "fit_$1" ;;
+	*) return 1 ;;
+	esac
+}
+
+data_vol() { case "$1" in 1) echo rootfs_data ;; *) echo "rootfs_data_$1" ;; esac; }
+
+need_slot() {
+	case "$1" in 2|spare) return 0 ;; esac
+	echo "slot must be 2 or spare" >&2; exit 1
+}
+
+json_slot() {
+	local id="$1" fv dv
+	fv="$(slot_vol "$id")"; dv="$(data_vol "$id")"
+	printf '{"id":"%s","image":%d,"data":%d,"name":"%s","volid":"%s"}' \
+		"$id" "$(vol_size "$fv")" "$(vol_size "$dv")" "$(fit_name "$fv")" "$(vol_id "$fv")"
+}
+
+check_fit() {	# <file> [--force]
+	[ -f "$1" ] || { echo "file not found: $1" >&2; exit 1; }
+	[ "$(hexdump -n 4 -e '1/1 "%02x"' "$1")" = "d00dfeed" ] || { echo "not a FIT image (.itb)" >&2; exit 1; }
+	if ! grep -q -a "viettel,32x6" "$1" && [ "$2" != "--force" ]; then
+		echo "image does not mention viettel,32x6 - wrong device? add --force to override" >&2
+		exit 1
+	fi
+}
+
+rm_vol() { vol_node "$1" >/dev/null && ubirmvol /dev/$DEV -N "$1"; }
+
+drop_name() {	# forget the label of a volume that is about to be removed
+	local id; id="$(vol_id "$1")" || return 0
+	printf 'fwname_%s\n' "$id" | envset_file
+}
+
+swap_names() {	# atomically exchange slot 1 with slot <id> (image + data)
+	# two statements: in "local a=x b=$a" the shell expands $a before assigning it
+	local id="$1"
+	local args="fit fit_$id fit_$id fit"
+	if vol_node rootfs_data >/dev/null && vol_node "rootfs_data_$id" >/dev/null; then
+		args="$args rootfs_data rootfs_data_$id rootfs_data_$id rootfs_data"
+	elif vol_node rootfs_data >/dev/null; then
+		args="$args rootfs_data rootfs_data_$id"
+	elif vol_node "rootfs_data_$id" >/dev/null; then
+		args="$args rootfs_data_$id rootfs_data"
+	fi
+	# shellcheck disable=SC2086
+	ubirename /dev/$DEV $args
+}
+
+migrate() {	# refresh the U-Boot scripts in the saved env when mfw_env differs
+	local cur want
+	want="$(sed -n 's/^mfw_env //p' "$ENVFILE")"
+	cur="$(envget mfw_env)"
+	[ -n "$want" ] && [ "$cur" != "$want" ] || return 0
+	# shipped defaults + keys used by earlier versions (deleted)
+	{ grep -v '^#' "$ENVFILE"; printf '%s\n' $OBSOLETE; } | envset_file && \
+		logger -t multifw "U-Boot env scripts updated to mfw_env=$want"
+}
+
+home_after_swap() {	# <slot a> <slot b>: new mfw_home after exchanging slots a and b
+	local h; h="$(envget mfw_home)"
+	if [ "$h" = "$1" ]; then echo "$2"
+	elif [ "$h" = "$2" ]; then echo "$1"
+	else echo "$h"
+	fi
+}
+
+# Extend mode: drop the spare and give its space to the running OpenWrt's
+# settings/packages (rootfs_data). UBIFS cannot grow in place, so a new
+# rootfs_data is created at the target size, the config backup is put into
+# it (preinit restores /sysupgrade.tgz), and the volumes are swapped
+# atomically; the old one is removed by /etc/init.d/multifw after the
+# reboot. Installed packages are lost, settings are kept.
+EXTEND_RESERVE_LEBS=8	# kept free besides DATA_MAX_DEFAULT so "extend off" always fits
+
+resize_data() {	# <bytes>: recreate rootfs_data at that size, keep config, reboot
+	local size="$1" mnt=/tmp/multifw.newdata cfg=/tmp/multifw.cfg.tgz
+	vol_node rootfs_data_new >/dev/null && ubirmvol /dev/$DEV -N rootfs_data_new
+	vol_node rootfs_data_old >/dev/null && ubirmvol /dev/$DEV -N rootfs_data_old
+	ubimkvol /dev/$DEV -N rootfs_data_new -s "$size" || return 1
+	sysupgrade -b "$cfg" || return 1
+	mkdir -p "$mnt"
+	if ! mount -t ubifs "$DEV:rootfs_data_new" "$mnt"; then
+		ubirmvol /dev/$DEV -N rootfs_data_new; return 1
+	fi
+	cp "$cfg" "$mnt/sysupgrade.tgz" && sync
+	umount "$mnt"; rm -f "$cfg"
+	sync
+	ubirename /dev/$DEV rootfs_data rootfs_data_old rootfs_data_new rootfs_data || return 1
+	echo "settings volume resized to $((size / 1048576)) MiB, rebooting (packages are reinstalled by hand)"
+	( sleep 2; reboot ) >/dev/null 2>&1 &
+}
+
+# KeeneticOS: U-Boot boots it from the raw "keenetic" partition when env
+# mfw_os=keenetic (the mesh button clears that and boots OpenWrt). Layout of
+# the partition, matching the KeeneticOS kernel (ndmpart) of this port:
+#   0x0000000 Firmware_1 (stock KN-3812 format: FIT + squashfs + trailer)
+#   0x1e00000 Config_1, 0x1e80000 Config_2 (ndm needs the dual config),
+#   0x1f00000 U-State, 0x1f20000 Dump, 0x1f40000 D-State (KeeneticOS writes)
+#   0x1f60000 RF-EEPROM (Factory Wi-Fi data copy with the LAN/WAN MACs)
+# The identity (U-Config) is the "U-Config" partition. Both data images come
+# from mk_keenetic_data.py (keenetic-32x6/tools) and are written
+# once by "keenetic-init". NAND bad blocks are not remapped there.
+KN_FW_MAX=$((0x1e00000))
+KN_CFG_OFF=$((0x1e00000))
+KN_E2P_OFF=$((0x1f60000))
+KN_E2P_SIZE=$((0xa0000))
+KN_UCFG_SIZE=$((0x40000))
+
+mtd_dev() { grep "\"$1\"" /proc/mtd | cut -d: -f1; }
+
+hexat() {	# <file|dev> <offset> <bytes>
+	dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | hexdump -v -e '1/1 "%02x"'
+}
+
+kn_check_part() {
+	KN=$(mtd_dev keenetic); UC=$(mtd_dev U-Config)
+	[ -n "$KN" ] && [ -n "$UC" ] || { echo "no keenetic/U-Config partition (old layout?)" >&2; exit 1; }
+	[ "$(cat /sys/class/mtd/$KN/bad_blocks)" = 0 ] || {
+		echo "the keenetic partition has bad blocks, KeeneticOS cannot use it" >&2; exit 1; }
+}
+
+kn_status() {	# -> JSON object
+	local kn uc fw=false data=false
+	kn=$(mtd_dev keenetic); uc=$(mtd_dev U-Config)
+	if [ -n "$kn" ]; then
+		[ "$(hexat /dev/$kn 0 4)" = d00dfeed ] && fw=true
+		[ "$(hexat /dev/$kn $KN_E2P_OFF 4)" != ffffffff ] && \
+			[ -n "$uc" ] && [ "$(hexat /dev/$uc 4 8)" != ffffffffffffffff ] && data=true
+	fi
+	printf '{"layout":%s,"firmware":%s,"data":%s,"name":"%s","active":%s}' \
+		"$([ -n "$kn" ] && echo true || echo false)" "$fw" "$data" \
+		"$([ "$fw" = true ] && envget kn_name | tr -d '"\\')" \
+		"$([ "$(envget mfw_os)" = keenetic ] && echo true || echo false)"
+}
+
+kn_check_image() {	# <file> [--force]
+	local f="$1" size tail
+	[ -f "$f" ] || { echo "file not found: $f" >&2; exit 1; }
+	size=$(wc -c < "$f")
+	# FIT first, squashfs on a block boundary after 1 MiB (ndmpart searches it
+	# the same way); U-Boot reads the first 2 MiB, so the FIT must end before
+	local o=$((0x100000)) sq=""
+	while [ $o -le $((0x200000)) ]; do
+		[ "$(hexat "$f" $o 4)" = 68737173 ] && { sq=$o; break; }
+		o=$((o + 0x20000))
+	done
+	[ "$(hexat "$f" 0 4)" = d00dfeed ] && [ -n "$sq" ] || {
+		echo "not a KeeneticOS firmware (FIT + squashfs within 2 MiB)" >&2; exit 1; }
+	[ "$size" -le "$KN_FW_MAX" ] || { echo "image too large ($size > $KN_FW_MAX)" >&2; exit 1; }
+	tail -c 64 "$f" | grep -a -q 'ZNBG' && tail -c 64 "$f" | grep -a -q 'KN-3812' || {
+		[ "$2" = --force ] || { echo "not a KN-3812 build - add --force to override" >&2; exit 1; }; }
+	grep -q -a "Viettel vAP-32X6V1" "$f" || [ "$2" = --force ] || {
+		echo "this is a stock KN-3812 image, not the 32x6 build: it would break the shared NAND" >&2; exit 1; }
+}
+
+DEV="$(ubi_dev)"
+[ -n "$DEV" ] || { echo "UBI partition \"ubi\" not attached" >&2; exit 1; }
+
+case "$1" in
+status)
+	printf '{"free":%d,"leb":%d,"recovery":%d,' "$(free_bytes)" "$(leb)" "$(vol_size recovery)"
+	printf '"extend":%s,' "$([ "$(envget mfw_extend)" = 1 ] && echo true || echo false)"
+	printf '"boot_trial":%s,"rolled_back":%s,"pending":"%s","home":"%s","backup":%s,"data_max":%d,"slots":[' \
+		"$([ -n "$(envget boot_trial)" ] && echo true || echo false)" \
+		"$([ -n "$(envget rolled_back)" ] && echo true || echo false)" \
+		"$(envget boot_slot)" "$(envget mfw_home)" \
+		"$([ "$(envget upgrade_backup)" = "0" ] && echo false || echo true)" \
+		"$(( $(envget rootfs_data_max || echo $DATA_MAX_DEFAULT) ))"
+	json_slot 1; printf ','; json_slot 2; printf ','; json_slot spare
+	printf '],"keenetic":'; kn_status; printf '}\n'
+	;;
+boot)
+	# boot <2|spare> [--no-reboot]: slot <id> becomes the running firmware
+	# boot keenetic [--no-reboot]: KeeneticOS boots until the mesh button is held
+	if [ "$2" = keenetic ]; then
+		kn_check_part
+		case "$(kn_status)" in *'"firmware":true,"data":true'*) ;;
+		*) echo "KeeneticOS is not installed (keenetic-init + flash keenetic)" >&2; exit 1 ;; esac
+		printf 'mfw_os keenetic\n' | envset_file || exit 1
+		echo "KeeneticOS will boot next (hold the mesh button at power-on to return to OpenWrt)"
+		[ "$3" = "--no-reboot" ] || ( sleep 2; reboot ) >/dev/null 2>&1 &
+		exit 0
+	fi
+	need_slot "$2"
+	vol_node "fit_$2" >/dev/null || { echo "slot $2 is empty" >&2; exit 1; }
+	sync
+	swap_names "$2" || exit 1
+	# mfw_home = slot holding OpenWrt (the mesh button boots it); follow the swap
+	printf 'boot_slot\nboot_trial\nboot_count\nmfw_home %s\n' "$(home_after_swap 1 "$2")" | envset_file
+	echo "slot $2 will boot next"
+	[ "$3" = "--no-reboot" ] || ( sleep 2; reboot ) >/dev/null 2>&1 &
+	;;
+flash)
+	# flash 2 <file.itb> [--name LABEL] [--force]: replace in place (the
+	# spare slot only keeps the previous OpenWrt)
+	# flash keenetic <file.bin> [--force]: KeeneticOS firmware, settings kept
+	if [ "$2" = keenetic ]; then
+		kn_check_part
+		kn_check_image "$3" "$4"
+		mtd -q write "$3" keenetic || exit 1
+		mtd -q verify "$3" keenetic 2>&1 | grep -q Success || { echo "verify failed" >&2; exit 1; }
+		name="KeeneticOS $(tail -c 64 "$3" | grep -a -m1 -o '[0-9]\.[0-9][0-9]\.[A-Z]\.[0-9.]*-[0-9]*')"
+		printf 'kn_name %s\n' "$name" | envset_file
+		echo "$name written"
+		exit 0
+	fi
+	need_slot "$2"; [ "$2" = spare ] && { echo "use flash 2 or 3" >&2; exit 1; }
+	slot="$2"; img="$3"; shift 3
+	name=""; force=""
+	while [ $# -gt 0 ]; do
+		case "$1" in --name) name="$2"; shift ;; --force) force=--force ;; esac
+		shift
+	done
+	check_fit "$img" $force
+	size=$(wc -c < "$img")
+	drop_name "fit_$slot"; rm_vol "fit_$slot"; rm_vol "rootfs_data_$slot"
+	ubimkvol /dev/$DEV -N "fit_$slot" -s "$size" || { echo "not enough free space ($(free_bytes) bytes free)" >&2; exit 1; }
+	ubiupdatevol "/dev/$(vol_node "fit_$slot")" "$img" || exit 1
+	[ -n "$name" ] || name="$(basename "$img" | sed 's/\.itb$//; s/-squashfs-sysupgrade$//; s/-mediatek-filogic-viettel_32x6$//')"
+	printf 'fwname_%s %s\n' "$(vol_id "fit_$slot")" "$name" | envset_file
+	echo "slot $slot written ($size bytes)"
+	;;
+restore)
+	# restore 2: put the spare back into slot <id> (exchange them)
+	need_slot "$2"; [ "$2" = spare ] && exit 1
+	vol_node fit_spare >/dev/null || { echo "spare is empty" >&2; exit 1; }
+	args="fit_spare fit_$2"
+	vol_node "fit_$2" >/dev/null && args="$args fit_$2 fit_spare"
+	vol_node rootfs_data_spare >/dev/null && args="$args rootfs_data_spare rootfs_data_$2"
+	vol_node "rootfs_data_$2" >/dev/null && args="$args rootfs_data_$2 rootfs_data_spare"
+	# shellcheck disable=SC2086
+	ubirename /dev/$DEV $args || exit 1
+	printf 'mfw_home %s\n' "$(home_after_swap spare "$2")" | envset_file
+	echo "spare restored into slot $2"
+	;;
+delete)
+	need_slot "$2"
+	drop_name "fit_$2"; rm_vol "fit_$2"; rm_vol "rootfs_data_$2"
+	echo "slot $2 deleted"
+	;;
+reset)
+	# reset <2|spare>: drop the settings of a slot (recreated empty at the
+	# configured size on its next boot). Slot 1 needs a reboot right after.
+	# reset keenetic: KeeneticOS factory reset (erases Config_1 and Config_2)
+	if [ "$2" = keenetic ]; then
+		kn_check_part
+		f=/tmp/multifw.kn.ff
+		dd if=/dev/zero bs=65536 count=16 2>/dev/null | tr '\000' '\377' > "$f"
+		mtd -q -p "$KN_CFG_OFF" write "$f" keenetic; rc=$?
+		rm -f "$f"; [ $rc = 0 ] && echo "KeeneticOS settings erased"
+		exit $rc
+	fi
+	case "$2" in 1) dv=rootfs_data ;; 2|spare) dv="rootfs_data_$2" ;; *) exit 1 ;; esac
+	[ "$2" = 1 ] && { echo "use 'firstboot' to reset the running firmware" >&2; exit 1; }
+	rm_vol "$dv" && echo "settings of slot $2 removed"
+	;;
+name)
+	# name <1|2|spare> <label>
+	fv="$(slot_vol "$2")" || exit 1
+	id="$(vol_id "$fv")" || { echo "slot $2 is empty" >&2; exit 1; }
+	shift 2
+	printf 'fwname_%s %s\n' "$id" "$*" | envset_file
+	;;
+backup)
+	case "$2" in
+	on) printf 'upgrade_backup\n' | envset_file ;;
+	off) printf 'upgrade_backup 0\n' | envset_file ;;
+	*) echo "usage: $0 backup on|off" >&2; exit 1 ;;
+	esac
+	;;
+extend)
+	case "$2" in
+	on)
+		[ "$(envget mfw_extend)" = 1 ] && { echo "extend mode is already on" >&2; exit 1; }
+		drop_name fit_spare; rm_vol fit_spare; rm_vol rootfs_data_spare
+		l=$(leb)
+		cur=$(vol_size rootfs_data)
+		size=$(( ($(free_bytes) + cur) / l * l - $(( (DATA_MAX_DEFAULT + l - 1) / l + EXTEND_RESERVE_LEBS )) * l ))
+		[ "$size" -gt "$cur" ] || { echo "not enough free space to extend" >&2; exit 1; }
+		# the new volume is created next to the old one, so it must fit in free space
+		[ "$size" -le "$(free_bytes)" ] || size=$(( $(free_bytes) / l * l - EXTEND_RESERVE_LEBS * l ))
+		printf 'mfw_extend 1\nupgrade_backup 0\nrootfs_data_max 0x%x\n' "$size" | envset_file || exit 1
+		resize_data "$size" || { printf 'mfw_extend\nupgrade_backup\nrootfs_data_max %s\n' "$DATA_MAX_DEFAULT" | envset_file; exit 1; }
+		;;
+	off)
+		[ "$(envget mfw_extend)" = 1 ] || { echo "extend mode is already off" >&2; exit 1; }
+		printf 'mfw_extend\nupgrade_backup\nrootfs_data_max %s\n' "$DATA_MAX_DEFAULT" | envset_file || exit 1
+		resize_data $(( DATA_MAX_DEFAULT )) || exit 1
+		;;
+	*) echo "usage: $0 extend on|off" >&2; exit 1 ;;
+	esac
+	;;
+keenetic-init)
+	# keenetic-init <uconfig.bin> <rf-eeprom.bin>: erase the KeeneticOS region
+	# and U-Config, write the identity and the RF-EEPROM copy
+	kn_check_part
+	[ "$(wc -c < "$2")" = "$KN_UCFG_SIZE" ] && [ "$(wc -c < "$3")" = "$KN_E2P_SIZE" ] || {
+		echo "usage: $0 keenetic-init <uconfig.bin (256 KiB)> <rf-eeprom.bin (640 KiB)>" >&2; exit 1; }
+	[ "$(hexat "$3" 0 2)" = "$(hexat /dev/$(mtd_dev Factory) 0 2)" ] || {
+		echo "rf-eeprom.bin does not match this router's Factory data" >&2; exit 1; }
+	mtd -q erase keenetic && mtd -q erase U-Config || exit 1
+	mtd -q write "$2" U-Config && mtd -q -p "$KN_E2P_OFF" write "$3" keenetic || exit 1
+	printf 'kn_name\n' | envset_file
+	echo "KeeneticOS region initialised (now: $0 flash keenetic <file.bin>)"
+	;;
+keenetic-log)
+	# console of the last KeeneticOS run (ramoops, saved by U-Boot to UBI
+	# volume kn_log when the mesh button returns to OpenWrt)
+	n="$(vol_node kn_log)" || { echo "no KeeneticOS log saved" >&2; exit 1; }
+	tr -c '\11\12\40-\176' '\n' < "/dev/$n" | grep -v '^.\{0,2\}$'
+	;;
+cancel)
+	printf 'boot_slot\n' | envset_file
+	;;
+clear-rollback)
+	printf 'rolled_back\n' | envset_file
+	;;
+flash-recovery)
+	check_fit "$2" --force
+	rm_vol recovery
+	ubimkvol /dev/$DEV -N recovery -s "$(wc -c < "$2")" || exit 1
+	ubiupdatevol "/dev/$(vol_node recovery)" "$2" && echo "recovery written"
+	;;
+migrate)
+	migrate
+	;;
+*)
+	cat >&2 <<-EOF
+	Multi Firmware - usage: $0 <command>
+	  status                         JSON overview of all slots
+	  boot <2|spare> [--no-reboot]   make that slot the running firmware
+	  flash 2 <file.itb> [--name LABEL] [--force]
+	                                 store a firmware in slot 2 (replaced in place)
+	  restore 2                      move the spare back into slot 2
+	  delete <2|spare>               free a slot
+	  reset <2|spare>                drop a slot's settings
+	  name <1|2|spare> <label>       rename a slot
+	  backup on|off                  keep a spare copy when upgrading (default on)
+	  extend on|off                  use the spare's space for packages (no backup)
+	  flash-recovery <file.itb>      store the initramfs recovery image
+	  keenetic-init <uconfig.bin> <rf-eeprom.bin>
+	                                 prepare the KeeneticOS region (erases it)
+	  flash keenetic <file.bin>      write KeeneticOS (its settings are kept)
+	  boot keenetic | reset keenetic boot KeeneticOS / erase its settings
+	  keenetic-log                   console of the last KeeneticOS run
+	  cancel | clear-rollback | migrate
+	EOF
+	exit 1
+	;;
+esac

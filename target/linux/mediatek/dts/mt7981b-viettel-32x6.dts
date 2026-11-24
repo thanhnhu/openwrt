@@ -1,0 +1,315 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * Viettel vAP-32X6V1 (OEM Askey, MT7981B + MT7976CN + MT7531AE, 256MB DDR3, 128MB SPI-NAND)
+ *
+ * Hardware facts verified against the stock firmware (OpenWrt 21.02 MTK SDK):
+ *  - MT7531 switch, stock portmap "wllll": port0 = WAN, port1/port2 = LAN
+ *    (only 3 RJ45 jacks are populated, no USB port)
+ *  - reset button GPIO1, WPS/mesh button GPIO0, switch reset GPIO39
+ *  - Ethernet MACs at Factory+0x24 (WAN) and Factory+0x2a (LAN), WiFi base
+ *    MAC at Factory+0x4 (Factory+0x1fef20 is erased/0xff on retail units);
+ *    matches stock board.json (LAN = label-1, WAN = label)
+ *  - one RGB LED, verified by toggling GPIOs on the real unit:
+ *    red GPIO5, blue GPIO7, green GPIO8 (all active-low). GPIO9 (active-high)
+ *    and GPIO34 (active-low) are extra drivers of the same green die and must
+ *    be kept off, otherwise green stays lit. GPIO35 is not connected to a LED.
+ */
+
+/dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+
+#include "mt7981b.dtsi"
+
+/ {
+	model = "Viettel vAP-32X6V1";
+	compatible = "viettel,32x6", "mediatek,mt7981";
+
+	aliases {
+		label-mac-device = &gmac0;
+
+		led-boot = &led_status_red;
+		led-failsafe = &led_status_red;
+		led-running = &led_status_green;
+		led-upgrade = &led_status_blue;
+
+		serial0 = &uart0;
+	};
+
+	chosen {
+		rootdisk = <&ubi_fit_volume>;
+		stdout-path = "serial0:115200n8";
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		button-0 {
+			label = "mesh";
+			gpios = <&pio 0 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_WPS_BUTTON>;
+			debounce-interval = <60>;
+		};
+
+		button-1 {
+			label = "reset";
+			gpios = <&pio 1 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+			debounce-interval = <60>;
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led_status_red: led-0 {
+			color = <LED_COLOR_ID_RED>;
+			function = LED_FUNCTION_STATUS;
+			gpios = <&pio 5 GPIO_ACTIVE_LOW>;
+		};
+
+		led_status_blue: led-1 {
+			color = <LED_COLOR_ID_BLUE>;
+			function = LED_FUNCTION_STATUS;
+			gpios = <&pio 7 GPIO_ACTIVE_LOW>;
+		};
+
+		led_status_green: led-2 {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_STATUS;
+			gpios = <&pio 8 GPIO_ACTIVE_LOW>;
+		};
+
+		/* secondary drivers of the green die, kept off by default */
+		led-3 {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_WAN;
+			gpios = <&pio 9 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+
+		led-4 {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_WLAN;
+			gpios = <&pio 34 GPIO_ACTIVE_LOW>;
+			default-state = "off";
+		};
+	};
+};
+
+&eth {
+	status = "okay";
+
+	gmac0: mac@0 {
+		compatible = "mediatek,eth-mac";
+		reg = <0>;
+		phy-mode = "2500base-x";
+
+		nvmem-cell-names = "mac-address";
+		nvmem-cells = <&macaddr_factory_2a 0>;
+
+		fixed-link {
+			speed = <2500>;
+			full-duplex;
+			pause;
+		};
+	};
+};
+
+&mdio_bus {
+	switch: switch@1f {
+		compatible = "mediatek,mt7531";
+		reg = <0x1f>;
+		reset-gpios = <&pio 39 GPIO_ACTIVE_HIGH>;
+		interrupt-controller;
+		#interrupt-cells = <1>;
+		interrupt-parent = <&pio>;
+		interrupts = <38 IRQ_TYPE_LEVEL_HIGH>;
+	};
+};
+
+&spi0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&spi0_flash_pins>;
+	status = "okay";
+
+	spi_nand@0 {
+		compatible = "spi-nand";
+		reg = <0>;
+
+		spi-max-frequency = <52000000>;
+		spi-tx-bus-width = <4>;
+		spi-rx-bus-width = <4>;
+
+		spi-cal-enable;
+		spi-cal-mode = "read-data";
+		spi-cal-datalen = <7>;
+		spi-cal-data = /bits/ 8 <0x53 0x50 0x49 0x4e 0x41 0x4e 0x44>;
+		spi-cal-addrlen = <5>;
+		spi-cal-addr = /bits/ 32 <0x0 0x0 0x0 0x0 0x0>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "BL2";
+				reg = <0x0 0x100000>;
+				read-only;
+			};
+
+			/* KeeneticOS identity (multifw keenetic-init) */
+			partition@100000 {
+				label = "U-Config";
+				reg = <0x100000 0x80000>;
+			};
+
+			partition@180000 {
+				label = "Factory";
+				reg = <0x180000 0x200000>;
+				read-only;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					eeprom_factory_0: eeprom@0 {
+						reg = <0x0 0x1000>;
+					};
+
+					macaddr_factory_24: macaddr@24 {
+						compatible = "mac-base";
+						reg = <0x24 0x6>;
+						#nvmem-cell-cells = <1>;
+					};
+
+					macaddr_factory_2a: macaddr@2a {
+						compatible = "mac-base";
+						reg = <0x2a 0x6>;
+						#nvmem-cell-cells = <1>;
+					};
+				};
+			};
+
+			partition@380000 {
+				label = "FIP";
+				reg = <0x380000 0x200000>;
+				read-only;
+			};
+
+			partition@580000 {
+				label = "ubi";
+				reg = <0x580000 0x5a80000>;
+				compatible = "linux,ubi";
+
+				volumes {
+					ubi_fit_volume: ubi-volume-fit {
+						volname = "fit";
+					};
+
+					ubi_ubootenv: ubi-volume-ubootenv {
+						volname = "ubootenv";
+					};
+
+					ubi_ubootenv2: ubi-volume-ubootenv2 {
+						volname = "ubootenv2";
+					};
+				};
+			};
+
+			/* KeeneticOS (raw, no UBI): firmware, settings, U-State and an
+			 * RF-EEPROM copy; booted by U-Boot when env mfw_os=keenetic */
+			partition@6000000 {
+				label = "keenetic";
+				reg = <0x6000000 0x2000000>;
+			};
+		};
+	};
+};
+
+&switch {
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+			label = "wan";
+
+			nvmem-cell-names = "mac-address";
+			nvmem-cells = <&macaddr_factory_24 0>;
+		};
+
+		port@1 {
+			reg = <1>;
+			label = "lan1";
+		};
+
+		port@2 {
+			reg = <2>;
+			label = "lan2";
+		};
+
+		port@6 {
+			reg = <6>;
+			ethernet = <&gmac0>;
+			phy-mode = "2500base-x";
+
+			fixed-link {
+				speed = <2500>;
+				full-duplex;
+				pause;
+			};
+		};
+	};
+};
+
+&pio {
+	spi0_flash_pins: spi0-pins {
+		mux {
+			function = "spi";
+			groups = "spi0", "spi0_wp_hold";
+		};
+
+		conf-pu {
+			pins = "SPI0_CS", "SPI0_HOLD", "SPI0_WP";
+			drive-strength = <MTK_DRIVE_8mA>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_11>;
+		};
+
+		conf-pd {
+			pins = "SPI0_CLK", "SPI0_MOSI", "SPI0_MISO";
+			drive-strength = <MTK_DRIVE_8mA>;
+			bias-pull-down = <MTK_PUPD_SET_R1R0_11>;
+		};
+	};
+};
+
+&uart0 {
+	status = "okay";
+};
+
+&ubi_ubootenv {
+	nvmem-layout {
+		compatible = "u-boot,env-redundant-bool";
+	};
+};
+
+&ubi_ubootenv2 {
+	nvmem-layout {
+		compatible = "u-boot,env-redundant-bool";
+	};
+};
+
+&watchdog {
+	status = "okay";
+};
+
+&wifi {
+	status = "okay";
+	nvmem-cell-names = "eeprom";
+	nvmem-cells = <&eeprom_factory_0>;
+};

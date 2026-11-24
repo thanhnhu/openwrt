@@ -1,0 +1,25 @@
+#!/bin/sh
+# JSON for the LuCI Overview "Hardware" row: CPU temperature (millidegrees C)
+# and SPI-NAND identification. The kernel names the NAND vendor/size/OOB only
+# in its boot log, so those two lines are cached on first use.
+
+cache=/tmp/hwinfo.nand
+[ -s "$cache" ] || dmesg 2>/dev/null | grep -A1 "SPI NAND was found" | head -2 > "$cache"
+
+temp="$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)"
+vendor="$(sed -n '1s/.*: \(.*\) SPI NAND was found.*/\1/p' "$cache")"
+size="$(sed -n '2s/^[^:]*: \([0-9]* [KMG]iB\),.*/\1/p' "$cache")"
+oob="$(sed -n '2s/.*OOB size: \([0-9]*\).*/\1/p' "$cache")"
+[ -n "$oob" ] || oob="$(cat /sys/class/mtd/mtd0/oobsize 2>/dev/null)"
+ecc="$(cat /sys/class/mtd/mtd0/ecc_strength 2>/dev/null)"
+
+# best-effort model from vendor + OOB size (not read from the chip ID)
+guess=""
+case "$vendor:$oob" in
+Winbond:96) guess="W25N01KV" ;;
+Winbond:64) guess="W25N01GV" ;;
+Macronix:*) guess="MX35LF1G" ;;
+esac
+
+printf '{"temp":%s,"nand":{"vendor":"%s","size":"%s","oob":"%s","ecc":"%s","guess":"%s"}}\n' \
+	"${temp:-null}" "$vendor" "$size" "$oob" "$ecc" "$guess"

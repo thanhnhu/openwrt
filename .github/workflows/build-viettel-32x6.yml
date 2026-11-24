@@ -1,0 +1,147 @@
+name: Build Viettel 32x6 firmware
+
+# Manual only: Actions -> "Build Viettel 32x6 firmware" -> Run workflow.
+# Builds the images defined by viettel-32x6.diffconfig, uploads them as an
+# artifact and publishes them as a release named after the upstream OpenWrt
+# release the branch is based on: 32x6v25.12.6, or 32x6v25.12.6-multifw for
+# the *-multifw branch (prefixed so it never clashes with upstream's v25.12.6
+# when syncing). Building the same version again replaces that release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a release (off = artifact only)"
+        type: boolean
+        default: true
+      debug:
+        description: "Rebuild with -j1 V=s on failure"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-viettel-32x6-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h /
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Version
+        id: ver
+        run: |
+          # newest upstream OpenWrt release tag whose commit is in this branch
+          # (the fork carries no upstream tags)
+          ver=
+          while read -r sha ref; do
+            t=${ref#refs/tags/}; t=${t%'^{}'}
+            if git cat-file -e "$sha^{commit}" 2>/dev/null && git merge-base --is-ancestor "$sha" HEAD; then
+              ver=$t; base=$sha; break
+            fi
+          done < <(git ls-remote --tags https://github.com/openwrt/openwrt.git 'v[0-9]*' |
+                   grep -F '^{}' | grep -v -- '-rc' | sort -t/ -k3 -rV)
+          [ -n "$ver" ] || { echo "::error::no upstream OpenWrt release tag in this branch"; exit 1; }
+          # the version embedded in the image must match
+          cfg=$(sed -n 's/^CONFIG_VERSION_NUMBER="\(.*\)"$/\1/p' viettel-32x6.diffconfig)
+          if [ "$cfg" != "${ver#v}" ]; then
+            echo "::error::viettel-32x6.diffconfig has CONFIG_VERSION_NUMBER=\"$cfg\", branch is based on $ver: update CONFIG_VERSION_NUMBER and CONFIG_VERSION_REPO"
+            exit 1
+          fi
+          case "$GITHUB_REF_NAME" in
+            *-multifw) tag=32x6$ver-multifw; title="OpenWrt ${ver#v} Multi Firmware" ;;
+            *) tag=32x6$ver; title="OpenWrt ${ver#v}" ;;
+          esac
+          echo "$tag: $ver + $(git rev-list --count "$base..HEAD") commits"
+          { echo "tag=$tag"; echo "title=$title"; echo "ver=$ver"; } >> "$GITHUB_OUTPUT"
+
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-dev python3-setuptools rsync swig unzip zlib1g-dev file \
+            wget zstd
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: dl
+          key: dl-${{ hashFiles('viettel-32x6.diffconfig', 'feeds.conf.default') }}-${{ github.sha }}
+          restore-keys: |
+            dl-${{ hashFiles('viettel-32x6.diffconfig', 'feeds.conf.default') }}-
+            dl-
+
+      - name: Update and install feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure
+        run: |
+          cp viettel-32x6.diffconfig .config
+          make defconfig
+          missing=0
+          while read -r l; do
+            grep -qxF "$l" .config || { echo "::error::not selected after defconfig: $l"; missing=1; }
+          done < <(grep -E '^CONFIG_' viettel-32x6.diffconfig)
+          exit $missing
+
+      - name: Download sources
+        run: make download -j8 || make download -j1 V=s
+
+      - name: Build
+        run: |
+          if ! make -j"$(nproc)"; then
+            [ "${{ inputs.debug }}" = "true" ] && make -j1 V=s
+            exit 1
+          fi
+
+      - name: Collect images
+        run: |
+          mkdir -p out
+          cp bin/targets/mediatek/filogic/*viettel_32x6* out/
+          cp bin/targets/mediatek/filogic/config.buildinfo out/ 2>/dev/null || true
+          (cd out && sha256sum -- * > sha256sums)
+          ls -la out
+          cat out/sha256sums
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: viettel-32x6-${{ github.run_number }}-${{ github.sha }}
+          path: out/
+          if-no-files-found: error
+
+      - name: Publish release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          TITLE: ${{ steps.ver.outputs.title }}
+          VER: ${{ steps.ver.outputs.ver }}
+        run: |
+          # same version again: replace the release and move the tag to this commit
+          gh release delete "$TAG" --cleanup-tag --yes 2>/dev/null || true
+          git push -q origin ":refs/tags/$TAG" 2>/dev/null || true
+          printf '%s\n' "OpenWrt $VER for Viettel vAP-32X6V1, branch $GITHUB_REF_NAME @ $GITHUB_SHA." \
+            "Read README-viettel-32x6.md before flashing. Check sha256sums." > notes.md
+          gh release create "$TAG" out/* --target "$GITHUB_SHA" --title "$TITLE" --notes-file notes.md
