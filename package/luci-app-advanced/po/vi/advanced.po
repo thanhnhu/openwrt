@@ -1,0 +1,223 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Project-Id-Version: luci-app-advanced\n"
+"Language: vi\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "Error: %s"
+msgstr "Lỗi: %s"
+
+msgid "Boot another firmware"
+msgstr "Khởi động firmware khác"
+
+msgid "Reboot into the firmware in %s? The firmware running now moves into that slot and can be booted back at any time."
+msgstr "Khởi động lại vào firmware ở %s? Firmware đang chạy sẽ chuyển vào slot đó và có thể quay lại bất cứ lúc nào."
+
+msgid "Cancel"
+msgstr "Hủy"
+
+msgid "Rebooting…"
+msgstr "Đang khởi động lại…"
+
+msgid "Switching firmware, reconnect in about 90 seconds."
+msgstr "Đang chuyển firmware, hãy kết nối lại sau khoảng 90 giây."
+
+msgid "Boot it"
+msgstr "Khởi động"
+
+msgid "Writing firmware…"
+msgstr "Đang ghi firmware…"
+
+msgid "Uploading and writing %s, do not power off."
+msgstr "Đang tải lên và ghi %s, không được ngắt điện."
+
+msgid "Firmware written to %s."
+msgstr "Đã ghi firmware vào %s."
+
+msgid "Multi Firmware"
+msgstr "Đa firmware"
+
+msgid "Multi Firmware is unavailable (multi-firmware not installed or UBI not attached)."
+msgstr "Không dùng được Đa firmware (chưa cài multi-firmware hoặc chưa gắn UBI)."
+
+msgid "The last upgrade did not boot; U-Boot went back to the previous firmware. The failed one is now in the spare slot."
+msgstr "Lần nâng cấp gần nhất không khởi động được; U-Boot đã quay về firmware trước đó. Bản lỗi hiện nằm ở slot Dự phòng."
+
+msgid "Dismiss"
+msgstr "Bỏ qua"
+
+msgid "This firmware is on trial after an upgrade; it is confirmed about 60 s after boot."
+msgstr "Firmware này đang chạy thử sau khi nâng cấp; sẽ được xác nhận khoảng 60 giây sau khi khởi động."
+
+msgid "Slot %s will boot at the next restart."
+msgstr "Slot %s sẽ khởi động ở lần khởi động lại tiếp theo."
+
+msgid "Running"
+msgstr "Đang chạy"
+
+msgid "Slot 2"
+msgstr "Slot 2"
+
+msgid "Spare"
+msgstr "Dự phòng"
+
+msgid "Slot"
+msgstr "Slot"
+
+msgid "Firmware"
+msgstr "Firmware"
+
+msgid "Image"
+msgstr "Ảnh"
+
+msgid "Settings"
+msgstr "Cấu hình"
+
+msgid "Boot"
+msgstr "Khởi động"
+
+msgid "Replace…"
+msgstr "Thay…"
+
+msgid "Load…"
+msgstr "Nạp…"
+
+msgid "Rename"
+msgstr "Đổi tên"
+
+msgid "Save"
+msgstr "Lưu"
+
+msgid "Delete"
+msgstr "Xóa"
+
+msgid "Delete the firmware and settings stored in %s?"
+msgstr "Xóa firmware và cấu hình đang lưu ở %s?"
+
+msgid "empty"
+msgstr "trống"
+
+msgid "Recovery"
+msgstr "Recovery"
+
+msgid "initramfs (fallback)"
+msgstr "initramfs (dự phòng khẩn cấp)"
+
+msgid "Free space: %s. Settings of slot 2 are limited to %s; OpenWrt gets the rest of the space at each upgrade. Holding the mesh/WPS button while powering on always boots OpenWrt (no serial console needed)."
+msgstr "Còn trống: %s. Cấu hình của slot 2 giới hạn %s; OpenWrt dùng phần còn lại sau mỗi lần nâng cấp. Giữ nút Mesh/WPS khi cắm điện luôn khởi động OpenWrt (không cần cáp console)."
+
+msgid "A firmware upgrade keeps the running OpenWrt in the spare slot with a backup of its configuration (installed packages are not kept) and goes back to it automatically if the new one fails to boot 3 times. Slot 2 is never touched by an upgrade; loading a firmware into it replaces the old one."
+msgstr "Khi nâng cấp firmware, OpenWrt đang chạy được giữ ở slot Dự phòng cùng bản sao lưu cấu hình (không giữ các gói đã cài) và tự quay về đó nếu bản mới không khởi động được 3 lần. Nâng cấp không bao giờ đụng tới slot 2; nạp firmware vào slot 2 sẽ thay bản cũ."
+
+msgid "Advanced"
+msgstr "Nâng cao"
+
+msgid "Radio options that are spread over several LuCI pages, plus Multi Firmware. Tx power is always capped by the regulatory domain of the selected country; stay within your local regulations."
+msgstr "Các tùy chọn radio vốn nằm rải rác ở nhiều trang LuCI, cùng Đa firmware. Công suất phát luôn bị giới hạn bởi mã quốc gia đã chọn; hãy tuân thủ quy định tại nơi bạn ở."
+
+msgid "Radios"
+msgstr "Radio"
+
+msgid "Country code"
+msgstr "Mã quốc gia"
+
+msgid "Two-letter ISO code, e.g. VN. Determines channels and the maximum tx power."
+msgstr "Mã ISO hai chữ cái, ví dụ VN. Quyết định các kênh và công suất phát tối đa."
+
+msgid "Tx power (dBm)"
+msgstr "Công suất phát (dBm)"
+
+msgid "Empty = maximum allowed by the regulatory domain and the calibration data."
+msgstr "Để trống = mức tối đa cho phép theo mã quốc gia và dữ liệu hiệu chuẩn."
+
+msgid "max"
+msgstr "tối đa"
+
+msgid "Channel width"
+msgstr "Độ rộng kênh"
+
+msgid "Narrower channels reach further and resist interference better."
+msgstr "Kênh hẹp phát xa hơn và chống nhiễu tốt hơn."
+
+msgid "Cell density"
+msgstr "Mật độ cell"
+
+msgid "Disabled keeps the lowest basic rates so far clients can still connect."
+msgstr "Tắt sẽ giữ tốc độ cơ bản thấp nhất để thiết bị ở xa vẫn kết nối được."
+
+msgid "Disabled"
+msgstr "Tắt"
+
+msgid "Normal"
+msgstr "Bình thường"
+
+msgid "High"
+msgstr "Cao"
+
+msgid "Very high"
+msgstr "Rất cao"
+
+msgid "HE SU beamformer"
+msgstr "HE SU beamformer"
+
+msgid "HE MU beamformer (MU-MIMO)"
+msgstr "HE MU beamformer (MU-MIMO)"
+
+msgid "VHT MU beamformer"
+msgstr "VHT MU beamformer"
+
+msgid "Coverage distance (m)"
+msgstr "Khoảng cách phủ sóng (m)"
+
+msgid "Raise only for long outdoor links; adjusts ACK timeout."
+msgstr "Chỉ tăng cho liên kết ngoài trời xa; điều chỉnh thời gian chờ ACK."
+
+msgid "Force 40 MHz (no coexistence scan)"
+msgstr "Ép 40 MHz (không quét cùng tồn tại)"
+
+msgid "2.4 GHz only. Ignores overlapping networks; may disturb neighbours."
+msgstr "Chỉ dành cho 2.4 GHz. Bỏ qua các mạng chồng lấn; có thể gây nhiễu cho hàng xóm."
+
+msgid "Access points"
+msgstr "Điểm truy cập"
+
+msgid "Disconnect on low ACK"
+msgstr "Ngắt kết nối khi ACK thấp"
+
+msgid "Disable to keep weak clients (behind walls) connected."
+msgstr "Tắt để giữ kết nối với thiết bị sóng yếu (sau tường)."
+
+msgid "802.11k neighbour reports"
+msgstr "Báo cáo hàng xóm 802.11k"
+
+msgid "802.11v BSS transition"
+msgstr "Chuyển vùng BSS 802.11v"
+
+msgid "Client isolation"
+msgstr "Cách ly client"
+
+msgid "Coverage presets"
+msgstr "Cấu hình phủ sóng có sẵn"
+
+msgid "\"Through-wall\": tx power at the legal maximum, 20 MHz on 2.4 GHz, low basic rates allowed, beamforming on, weak clients not kicked. \"Balanced\" restores the OpenWrt defaults for these options."
+msgstr "\"Xuyên tường\": công suất phát ở mức tối đa hợp lệ, 20 MHz trên 2.4 GHz, cho phép tốc độ cơ bản thấp, bật beamforming, không ngắt thiết bị sóng yếu. \"Cân bằng\" khôi phục mặc định OpenWrt cho các tùy chọn này."
+
+msgid "Apply \"Through-wall\""
+msgstr "Áp dụng \"Xuyên tường\""
+
+msgid "Apply \"Balanced\""
+msgstr "Áp dụng \"Cân bằng\""
+
+msgid "unknown"
+msgstr "không rõ"
+
+msgid "Hardware"
+msgstr "Phần cứng"
+
+msgid "CPU temperature"
+msgstr "Nhiệt độ CPU"
+
+msgid "NAND flash"
+msgstr "Bộ nhớ NAND"
+

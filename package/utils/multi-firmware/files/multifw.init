@@ -1,0 +1,39 @@
+#!/bin/sh /etc/rc.common
+# Multi Firmware: migrate old layout/env, label the running firmware and
+# confirm a trial boot after an upgrade (otherwise U-Boot rolls back).
+
+START=99
+CONFIRM_DELAY=60
+
+boot() {
+	local name id f=/tmp/multifw.boot.env
+
+	/usr/sbin/multifw migrate
+
+	# label the running firmware (key = UBI volume id of "fit")
+	name="$(. /etc/openwrt_release; echo "$DISTRIB_DESCRIPTION")"
+	for v in /sys/class/ubi/ubi*_*; do
+		[ "$(cat "$v/name" 2>/dev/null)" = fit ] && id="${v##*_}"
+	done
+	: > "$f"
+	[ -n "$name" ] && [ -n "$id" ] && [ "$(fw_printenv -n "fwname_$id" 2>/dev/null)" != "$name" ] && \
+		printf 'fwname_%s %s\n' "$id" "$name" >> "$f"
+	# this firmware is OpenWrt and runs as slot 1: the mesh button "home" is here
+	[ "$(fw_printenv -n mfw_home 2>/dev/null)" = 1 ] || echo "mfw_home 1" >> "$f"
+	[ -s "$f" ] && fw_setenv -s "$f"
+	rm -f "$f"
+
+	if [ -z "$(fw_printenv -n boot_trial 2>/dev/null)" ]; then
+		[ -n "$(fw_printenv -n rolled_back 2>/dev/null)" ] && \
+			logger -t multifw -p daemon.warn "last upgrade did not boot, U-Boot rolled back to the spare"
+		return 0
+	fi
+
+	logger -t multifw "boot trial active, confirming in ${CONFIRM_DELAY}s"
+	(
+		sleep "$CONFIRM_DELAY"
+		printf 'boot_trial\nboot_count\nrolled_back\n' > "$f" && fw_setenv -s "$f" && \
+			logger -t multifw "new firmware confirmed, rollback disarmed"
+		rm -f "$f"
+	) >/dev/null 2>&1 &
+}
