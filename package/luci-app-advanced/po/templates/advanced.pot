@@ -1,0 +1,221 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Project-Id-Version: luci-app-advanced\n"
+
+msgid "Error: %s"
+msgstr ""
+
+msgid "Boot another firmware"
+msgstr ""
+
+msgid "Reboot into the firmware in %s? The firmware running now moves into that slot and can be booted back at any time."
+msgstr ""
+
+msgid "Cancel"
+msgstr ""
+
+msgid "Rebooting…"
+msgstr ""
+
+msgid "Switching firmware, reconnect in about 90 seconds."
+msgstr ""
+
+msgid "Boot it"
+msgstr ""
+
+msgid "Writing firmware…"
+msgstr ""
+
+msgid "Uploading and writing %s, do not power off."
+msgstr ""
+
+msgid "Firmware written to %s."
+msgstr ""
+
+msgid "Multi Firmware"
+msgstr ""
+
+msgid "Multi Firmware is unavailable (multi-firmware not installed or UBI not attached)."
+msgstr ""
+
+msgid "The last upgrade did not boot; U-Boot went back to the previous firmware. The failed one is now in the spare slot."
+msgstr ""
+
+msgid "Dismiss"
+msgstr ""
+
+msgid "This firmware is on trial after an upgrade; it is confirmed about 60 s after boot."
+msgstr ""
+
+msgid "Slot %s will boot at the next restart."
+msgstr ""
+
+msgid "Running"
+msgstr ""
+
+msgid "Slot 2"
+msgstr ""
+
+msgid "Spare"
+msgstr ""
+
+msgid "Slot"
+msgstr ""
+
+msgid "Firmware"
+msgstr ""
+
+msgid "Image"
+msgstr ""
+
+msgid "Settings"
+msgstr ""
+
+msgid "Boot"
+msgstr ""
+
+msgid "Replace…"
+msgstr ""
+
+msgid "Load…"
+msgstr ""
+
+msgid "Rename"
+msgstr ""
+
+msgid "Save"
+msgstr ""
+
+msgid "Delete"
+msgstr ""
+
+msgid "Delete the firmware and settings stored in %s?"
+msgstr ""
+
+msgid "empty"
+msgstr ""
+
+msgid "Recovery"
+msgstr ""
+
+msgid "initramfs (fallback)"
+msgstr ""
+
+msgid "Free space: %s. Settings of slot 2 are limited to %s; OpenWrt gets the rest of the space at each upgrade. Holding the mesh/WPS button while powering on always boots OpenWrt (no serial console needed)."
+msgstr ""
+
+msgid "A firmware upgrade keeps the running OpenWrt in the spare slot with a backup of its configuration (installed packages are not kept) and goes back to it automatically if the new one fails to boot 3 times. Slot 2 is never touched by an upgrade; loading a firmware into it replaces the old one."
+msgstr ""
+
+msgid "Advanced"
+msgstr ""
+
+msgid "Radio options that are spread over several LuCI pages, plus Multi Firmware. Tx power is always capped by the regulatory domain of the selected country; stay within your local regulations."
+msgstr ""
+
+msgid "Radios"
+msgstr ""
+
+msgid "Country code"
+msgstr ""
+
+msgid "Two-letter ISO code, e.g. VN. Determines channels and the maximum tx power."
+msgstr ""
+
+msgid "Tx power (dBm)"
+msgstr ""
+
+msgid "Empty = maximum allowed by the regulatory domain and the calibration data."
+msgstr ""
+
+msgid "max"
+msgstr ""
+
+msgid "Channel width"
+msgstr ""
+
+msgid "Narrower channels reach further and resist interference better."
+msgstr ""
+
+msgid "Cell density"
+msgstr ""
+
+msgid "Disabled keeps the lowest basic rates so far clients can still connect."
+msgstr ""
+
+msgid "Disabled"
+msgstr ""
+
+msgid "Normal"
+msgstr ""
+
+msgid "High"
+msgstr ""
+
+msgid "Very high"
+msgstr ""
+
+msgid "HE SU beamformer"
+msgstr ""
+
+msgid "HE MU beamformer (MU-MIMO)"
+msgstr ""
+
+msgid "VHT MU beamformer"
+msgstr ""
+
+msgid "Coverage distance (m)"
+msgstr ""
+
+msgid "Raise only for long outdoor links; adjusts ACK timeout."
+msgstr ""
+
+msgid "Force 40 MHz (no coexistence scan)"
+msgstr ""
+
+msgid "2.4 GHz only. Ignores overlapping networks; may disturb neighbours."
+msgstr ""
+
+msgid "Access points"
+msgstr ""
+
+msgid "Disconnect on low ACK"
+msgstr ""
+
+msgid "Disable to keep weak clients (behind walls) connected."
+msgstr ""
+
+msgid "802.11k neighbour reports"
+msgstr ""
+
+msgid "802.11v BSS transition"
+msgstr ""
+
+msgid "Client isolation"
+msgstr ""
+
+msgid "Coverage presets"
+msgstr ""
+
+msgid "\"Through-wall\": tx power at the legal maximum, 20 MHz on 2.4 GHz, low basic rates allowed, beamforming on, weak clients not kicked. \"Balanced\" restores the OpenWrt defaults for these options."
+msgstr ""
+
+msgid "Apply \"Through-wall\""
+msgstr ""
+
+msgid "Apply \"Balanced\""
+msgstr ""
+
+msgid "unknown"
+msgstr ""
+
+msgid "Hardware"
+msgstr ""
+
+msgid "CPU temperature"
+msgstr ""
+
+msgid "NAND flash"
+msgstr ""
+

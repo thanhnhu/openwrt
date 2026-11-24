@@ -1,5 +1,149 @@
 REQUIRE_IMAGE_METADATA=1
-RAMFS_COPY_BIN='fitblk fit_check_sign'
+RAMFS_COPY_BIN='fitblk fit_check_sign ubirename'
+
+# Viettel 32x6 Multi Firmware upgrade. The running OpenWrt image (fit) is kept
+# as the spare slot (fit_spare, replacing the old spare) and a trial boot is
+# armed: U-Boot counts boots while boot_trial is set and swaps the spare back
+# after 3 failed attempts; /etc/init.d/multifw confirms the trial once the new
+# system is up. The firmware stored in slot 2 is never touched.
+#
+# Space: slot 2 settings are capped by env rootfs_data_max (U-Boot, and the
+# other firmware's own sysupgrade, create them at that size); OpenWrt in slot
+# 1 gets everything else. So the old settings volume is not kept whole: the
+# spare gets a small settings volume that only holds a backup of the old
+# configuration (restored at its first boot, packages are not), the old one
+# is deleted once the overlay is unmounted, and the new rootfs_data takes the
+# free space minus what slot 2 still needs (an image and its settings, when
+# slot 2 is empty).
+#
+#   platform_check_image    refuse early if it cannot fit
+#   platform_pre_upgrade    (stage2, before the RAM root) save the config,
+#                           rename fit -> fit_spare, rootfs_data -> _old
+#   platform_do_upgrade     (RAM root) delete rootfs_data_old, create the
+#                           small rootfs_data_spare, write the image, regrow
+#                           rootfs_data, restore the config, reboot
+VIETTEL_SPARE_TGZ=/tmp/multifw.spare.tgz
+VIETTEL_SPARE_DATA=$((0x300000))	# >= 17 LEBs, the UBIFS minimum
+VIETTEL_SLOT2_IMAGE=$((0x1e00000))	# room kept for a slot 2 image (ImmortalWrt ~28.5 MiB)
+VIETTEL_MARGIN=$((0x200000))
+
+viettel_32x6_vol_bytes() {	# <ubidev> <volname> -> data bytes or 0
+	local n; n="$(nand_find_volume "$1" "$2")"
+	[ -n "$n" ] && cat "/sys/class/ubi/$n/data_bytes" || echo 0
+}
+
+viettel_32x6_datamax() {
+	echo $(( $(fw_printenv -n rootfs_data_max 2>/dev/null || echo 0x1000000) ))
+}
+
+viettel_32x6_reserve() {	# <ubidev>: bytes kept free for slot 2
+	local r=$VIETTEL_MARGIN
+	[ -n "$(nand_find_volume $1 fit_2)" ] || r=$((r + VIETTEL_SLOT2_IMAGE))
+	[ -n "$(nand_find_volume $1 rootfs_data_2)" ] || r=$((r + $(viettel_32x6_datamax)))
+	echo $r
+}
+
+# refuse an upgrade that cannot keep a spare, before anything is touched
+viettel_32x6_check_space() {
+	local img="$1" ubidev leb need avail
+	ubidev="$(nand_find_ubi ubi)" || return 0
+	[ -n "$(nand_find_volume $ubidev fit)" ] || return 0
+	leb=$(cat /sys/class/ubi/$ubidev/eraseblock_size)
+	# new image + spare settings + slot 2 reserve + at least rootfs_data_max for OpenWrt
+	need=$(( ($(wc -c < "$img") + leb - 1) / leb * leb + VIETTEL_SPARE_DATA + \
+		$(viettel_32x6_reserve $ubidev) + $(viettel_32x6_datamax) ))
+	# free space + the old spare + the current settings (both deleted)
+	avail=$(( $(cat /sys/class/ubi/$ubidev/avail_eraseblocks) * leb + \
+		$(viettel_32x6_vol_bytes $ubidev fit_spare) + $(viettel_32x6_vol_bytes $ubidev rootfs_data_spare) + \
+		$(viettel_32x6_vol_bytes $ubidev rootfs_data) ))
+	[ "$need" -le "$avail" ] && return 0
+	echo "Multi Firmware: not enough space to keep the current firmware as spare"
+	echo "  need $((need / 1048576)) MiB, available $((avail / 1048576)) MiB."
+	echo "  Free slot 2 (multifw delete 2) or drop its settings (multifw reset 2)."
+	return 1
+}
+
+viettel_32x6_keep_spare()
+{
+	local ubidev id f=/tmp/multifw.upgrade.env
+
+	ubidev="$(nand_find_ubi ubi)" || return 0
+	[ -n "$ubidev" ] && [ -n "$(nand_find_volume $ubidev fit)" ] || return 0
+
+	sync
+	# configuration of the running firmware, for the spare's settings volume
+	sysupgrade -b "$VIETTEL_SPARE_TGZ" >/dev/null 2>&1 || rm -f "$VIETTEL_SPARE_TGZ"
+	: > "$f"
+	id="$(nand_find_volume $ubidev fit_spare)"
+	[ -n "$id" ] && { echo "fwname_${id##*_}" >> "$f"; ubirmvol /dev/$ubidev -N fit_spare; }
+	[ -n "$(nand_find_volume $ubidev rootfs_data_spare)" ] && ubirmvol /dev/$ubidev -N rootfs_data_spare
+	[ -n "$(nand_find_volume $ubidev rootfs_data_old)" ] && ubirmvol /dev/$ubidev -N rootfs_data_old
+
+	if [ -n "$(nand_find_volume $ubidev rootfs_data)" ]; then
+		ubirename /dev/$ubidev fit fit_spare rootfs_data rootfs_data_old || return 1
+	else
+		ubirename /dev/$ubidev fit fit_spare || return 1
+	fi
+
+	# write the env through a file: never pipe $(fw_printenv) into fw_setenv,
+	# both take fw_printenv.lock and the upgrade deadlocks
+	printf 'boot_trial 1\nboot_count 0\n' >> "$f"
+	fw_setenv -s "$f" && echo "Multi Firmware: running firmware kept as spare, trial boot armed"
+	local rc=$?
+	rm -f "$f"
+	return $rc
+}
+
+viettel_32x6_spare_data() {	# <ubidev>: small rootfs_data_spare holding the old config
+	local ubidev="$1" d=/tmp/multifw.spare
+	[ -f "$VIETTEL_SPARE_TGZ" ] || return 0
+	ubimkvol /dev/$ubidev -N rootfs_data_spare -s $VIETTEL_SPARE_DATA || return 0
+	mkdir -p $d
+	if mount -t ubifs "/dev/$(nand_find_volume $ubidev rootfs_data_spare)" $d; then
+		cp "$VIETTEL_SPARE_TGZ" "$d/$BACKUP_FILE" && sync
+		umount $d
+	else
+		ubirmvol /dev/$ubidev -N rootfs_data_spare
+	fi
+	rmdir $d
+	echo "Multi Firmware: spare keeps a backup of the previous configuration"
+}
+
+viettel_32x6_grow_data() {	# <ubidev>: rootfs_data (fresh, empty) takes the free space
+	local ubidev="$1" leb size
+	[ -n "$(nand_find_volume $ubidev rootfs_data)" ] || return 0
+	ubirmvol /dev/$ubidev -N rootfs_data || return 0
+	leb=$(cat /sys/class/ubi/$ubidev/eraseblock_size)
+	size=$(( ($(cat /sys/class/ubi/$ubidev/avail_eraseblocks) * leb - $(viettel_32x6_reserve $ubidev)) / leb * leb ))
+	[ "$size" -ge "$(viettel_32x6_datamax)" ] || size=$(viettel_32x6_datamax)
+	ubimkvol /dev/$ubidev -N rootfs_data -s $size || ubimkvol /dev/$ubidev -N rootfs_data -m || return 1
+	echo "Multi Firmware: OpenWrt settings volume $((size / 1048576)) MiB"
+}
+
+viettel_32x6_do_upgrade() {
+	local ubidev
+
+	export_fitblk_bootdev
+	[ "$CI_METHOD" = ubi ] || { fit_do_upgrade "$1"; return; }
+	[ -e /dev/fit0 ] && fitblk /dev/fit0
+	[ -e /dev/fitrw ] && fitblk /dev/fitrw
+	ubidev="$(nand_find_ubi "$CI_UBIPART")"
+
+	# the overlay is unmounted now: drop the old settings, the spare gets
+	# a backup of them (if deleting fails, the spare keeps them whole)
+	if [ -n "$ubidev" ] && [ -n "$(nand_find_volume $ubidev rootfs_data_old)" ]; then
+		if ubirmvol /dev/$ubidev -N rootfs_data_old; then
+			viettel_32x6_spare_data $ubidev
+		else
+			ubirename /dev/$ubidev rootfs_data_old rootfs_data_spare
+		fi
+	fi
+
+	sync
+	nand_do_flash_file "$1" || nand_do_upgrade_failed
+	[ -n "$ubidev" ] && viettel_32x6_grow_data $ubidev
+	nand_do_upgrade_success
+}
 
 asus_initial_setup()
 {
@@ -168,6 +312,9 @@ platform_do_upgrade() {
 	zyxel,ex5601-t0-ubootmod|\
 	zyxel,wx5600-t0-ubootmod)
 		fit_do_upgrade "$1"
+		;;
+	viettel,32x6)
+		viettel_32x6_do_upgrade "$1"
 		;;
 	acer,predator-w6|\
 	acer,predator-w6d|\
@@ -352,6 +499,11 @@ platform_check_image() {
 	[ "$#" -gt 1 ] && return 1
 
 	case "$board" in
+	viettel,32x6)
+		fit_check_image "$1" || return $?
+		viettel_32x6_check_space "$1"
+		return $?
+		;;
 	abt,asr3000|\
 	acer,predator-w6x-ubootmod|\
 	asus,zenwifi-bt8-ubootmod|\
@@ -487,6 +639,9 @@ platform_pre_upgrade() {
 		;;
 	buffalo,wsr-6000ax8)
 		buffalo_initial_setup
+		;;
+	viettel,32x6)
+		viettel_32x6_keep_spare || echo "Multi Firmware: could not keep a spare, upgrading in place"
 		;;
 	jiorouter,ax6000-jidu6101|\
 	jiorouter,ax6000-jidu6j01)

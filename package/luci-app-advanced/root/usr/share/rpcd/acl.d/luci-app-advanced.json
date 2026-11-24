@@ -1,0 +1,20 @@
+{
+	"luci-app-advanced": {
+		"description": "Grant access to advanced wireless options, hardware info and Multi Firmware",
+		"read": {
+			"uci": [ "wireless" ],
+			"file": {
+				"/usr/sbin/multifw status": [ "exec" ],
+				"/usr/libexec/hwinfo": [ "exec" ]
+			}
+		},
+		"write": {
+			"uci": [ "wireless" ],
+			"file": {
+				"/tmp/multifw-upload.itb": [ "write" ],
+				"/usr/sbin/multifw": [ "exec" ],
+				"/usr/sbin/multifw *": [ "exec" ]
+			}
+		}
+	}
+}

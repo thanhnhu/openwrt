@@ -1,0 +1,32 @@
+CONFIG_TARGET_mediatek=y
+CONFIG_TARGET_mediatek_filogic=y
+CONFIG_TARGET_mediatek_filogic_DEVICE_viettel_32x6=y
+CONFIG_TARGET_ROOTFS_INITRAMFS=y
+# Version: the upstream OpenWrt release the branch is based on (the GitHub
+# workflow checks it and uses it for the release tag, 32x6v<version>)
+CONFIG_IMAGEOPT=y
+CONFIG_VERSIONOPT=y
+CONFIG_VERSION_NUMBER="25.12.6"
+CONFIG_VERSION_REPO="https://downloads.openwrt.org/releases/25.12.6"
+# LuCI (HTTPS + Vietnamese)
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-ssl=y
+CONFIG_LUCI_LANG_vi=y
+# SQM
+CONFIG_PACKAGE_luci-app-sqm=y
+CONFIG_PACKAGE_sqm-scripts=y
+# WireGuard
+CONFIG_PACKAGE_luci-proto-wireguard=y
+CONFIG_PACKAGE_wireguard-tools=y
+CONFIG_PACKAGE_kmod-wireguard=y
+CONFIG_PACKAGE_qrencode=y
+# Mesh 802.11s (+ WPA3/SAE): full wpad instead of wpad-basic
+# CONFIG_PACKAGE_wpad-basic-mbedtls is not set
+CONFIG_PACKAGE_wpad-mesh-mbedtls=y
+# Dual boot A/B + advanced wireless page
+CONFIG_PACKAGE_multi-firmware=y
+CONFIG_PACKAGE_luci-app-advanced=y
+CONFIG_PACKAGE_kmod-mtd-rw=y
+# Useful tools
+CONFIG_PACKAGE_ethtool=y
+CONFIG_PACKAGE_iperf3=y
