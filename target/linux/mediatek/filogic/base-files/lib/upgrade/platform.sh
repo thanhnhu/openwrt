@@ -1,6 +1,76 @@
 REQUIRE_IMAGE_METADATA=1
 RAMFS_COPY_BIN='fitblk fit_check_sign'
 
+# Viettel 32x6 Multi Firmware upgrade: the running firmware (fit + rootfs_data)
+# is kept as the spare slot (fit_spare + rootfs_data_spare, replacing the old
+# spare) and a trial boot is armed. U-Boot counts boots while boot_trial is
+# set and swaps the spare back after 3 failed attempts; /etc/init.d/multifw
+# confirms the trial once the new system is up. Stored firmwares in slots
+# 2/3 are never touched. Set U-Boot env upgrade_backup=0 to upgrade in place.
+#
+# Runs from platform_pre_upgrade, i.e. in the full running system BEFORE the
+# switch to the RAM root. Renaming only touches the UBI volume table; the
+# running overlay and fitblk root keep working, and fit_do_upgrade then finds
+# no "fit"/"rootfs_data" volume and creates fresh ones.
+viettel_32x6_backup_on() {
+	[ "$(fw_printenv -n upgrade_backup 2>/dev/null)" != "0" ]
+}
+
+viettel_32x6_vol_bytes() {	# <ubidev> <volname> -> data bytes or 0
+	local n; n="$(nand_find_volume "$1" "$2")"
+	[ -n "$n" ] && cat "/sys/class/ubi/$n/data_bytes" || echo 0
+}
+
+# refuse an upgrade that cannot keep a spare copy, before anything is touched
+viettel_32x6_check_space() {
+	local img="$1" ubidev leb need avail datamax
+	viettel_32x6_backup_on || return 0
+	ubidev="$(nand_find_ubi ubi)" || return 0
+	[ -n "$(nand_find_volume $ubidev fit)" ] || return 0
+	leb=$(cat /sys/class/ubi/$ubidev/eraseblock_size)
+	datamax=$(( $(fw_printenv -n rootfs_data_max 2>/dev/null || echo 0x600000) ))
+	# new image + new settings volume, rounded up to whole LEBs
+	need=$(( ( ($(wc -c < "$img") + leb - 1) / leb + (datamax + leb - 1) / leb ) * leb ))
+	# free space + what deleting the current spare gives back
+	avail=$(( $(cat /sys/class/ubi/$ubidev/avail_eraseblocks) * leb + \
+		$(viettel_32x6_vol_bytes $ubidev fit_spare) + $(viettel_32x6_vol_bytes $ubidev rootfs_data_spare) ))
+	[ "$need" -le "$avail" ] && return 0
+	echo "Multi Firmware: not enough space to keep the current firmware as spare"
+	echo "  need $((need / 1048576)) MiB, available $((avail / 1048576)) MiB."
+	echo "  Free a slot (multifw delete 2), shrink settings (multifw reset 2),"
+	echo "  or upgrade without a spare copy: multifw backup off"
+	return 1
+}
+
+viettel_32x6_keep_spare()
+{
+	local ubidev id f=/tmp/multifw.upgrade.env
+
+	viettel_32x6_backup_on || return 0
+	ubidev="$(nand_find_ubi ubi)" || return 0
+	[ -n "$ubidev" ] && [ -n "$(nand_find_volume $ubidev fit)" ] || return 0
+
+	sync
+	: > "$f"
+	id="$(nand_find_volume $ubidev fit_spare)"
+	[ -n "$id" ] && { echo "fwname_${id##*_}" >> "$f"; ubirmvol /dev/$ubidev -N fit_spare; }
+	[ -n "$(nand_find_volume $ubidev rootfs_data_spare)" ] && ubirmvol /dev/$ubidev -N rootfs_data_spare
+
+	if [ -n "$(nand_find_volume $ubidev rootfs_data)" ]; then
+		ubirename /dev/$ubidev fit fit_spare rootfs_data rootfs_data_spare || return 1
+	else
+		ubirename /dev/$ubidev fit fit_spare || return 1
+	fi
+
+	# write the env through a file: never pipe $(fw_printenv) into fw_setenv,
+	# both take fw_printenv.lock and the upgrade deadlocks
+	printf 'boot_trial 1\nboot_count 0\n' >> "$f"
+	fw_setenv -s "$f" && echo "Multi Firmware: running firmware kept as spare, trial boot armed"
+	local rc=$?
+	rm -f "$f"
+	return $rc
+}
+
 asus_initial_setup()
 {
 	# initialize UBI if it's running on initramfs
@@ -167,6 +237,9 @@ platform_do_upgrade() {
 	xiaomi,mi-router-wr30u-ubootmod|\
 	zyxel,ex5601-t0-ubootmod|\
 	zyxel,wx5600-t0-ubootmod)
+		fit_do_upgrade "$1"
+		;;
+	viettel,32x6)
 		fit_do_upgrade "$1"
 		;;
 	acer,predator-w6|\
@@ -352,6 +425,11 @@ platform_check_image() {
 	[ "$#" -gt 1 ] && return 1
 
 	case "$board" in
+	viettel,32x6)
+		fit_check_image "$1" || return $?
+		viettel_32x6_check_space "$1"
+		return $?
+		;;
 	abt,asr3000|\
 	acer,predator-w6x-ubootmod|\
 	asus,zenwifi-bt8-ubootmod|\
@@ -487,6 +565,9 @@ platform_pre_upgrade() {
 		;;
 	buffalo,wsr-6000ax8)
 		buffalo_initial_setup
+		;;
+	viettel,32x6)
+		viettel_32x6_keep_spare || echo "Multi Firmware: could not keep a spare, upgrading in place"
 		;;
 	jiorouter,ax6000-jidu6101|\
 	jiorouter,ax6000-jidu6j01)

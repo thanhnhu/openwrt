@@ -11,6 +11,14 @@ full customization, to use the device in ways never envisioned.
 
 Sunshine!
 
+## Viettel vAP-32X6V1 (branch `viettel-32x6`)
+
+This branch adds the Viettel vAP-32X6V1 (MT7981B, 128 MB SPI-NAND) with a
+Multi Firmware U-Boot (several firmwares side by side, a spare slot for
+upgrade rollback, recovery image) and an "Advanced" LuCI page.
+See [README-viettel-32x6.md](README-viettel-32x6.md) for hardware notes,
+installation, Multi Firmware, recovery and build instructions.
+
 ## Download
 
 Built firmware images are available for many architectures and come with a
